@@ -233,8 +233,10 @@ details>summary{cursor:pointer;color:var(--ledger);font-size:13px}
         </div></div>
         </div>
         <div class="row">
-          <label class="f">卵番号<input id="f-num" class="num" autocomplete="off" placeholder="08"></label>
+          <label class="f">整理番号（卵番号）<input id="f-num" class="num" autocomplete="off" placeholder="08"></label>
           <div><div class="lbl">&nbsp;</div><div class="chips" id="numSugg"></div></div>
+        </div>
+        <div id="stockChips">
         </div>
         <label class="f">受精卵証明番号（ストロー・証明書の番号）<input id="f-cert" autocomplete="off" placeholder="例 CDB-36032"></label>
         <div class="eggline" id="o-egg">卵 —</div>
@@ -516,6 +518,72 @@ details>summary{cursor:pointer;color:var(--ledger);font-size:13px}
   else root.TAF = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
 </script>
+<script>/* ファームノートから落とした牛の一覧 CSV（Shift_JIS）→ TAF と同じ形の牛の配列
+   置き場所：会社OneDrive TAF牛一覧/ファームノート/<農家の略称>/牛一覧_最新.csv（先生が落として置く）
+   農家によって落とす一覧が違い、列も違う（2026-10-18 時点）:
+     友夢   … 友夢牧場在籍牛リスト。先頭に「○行目のCSVに使用できない文字が…」の注意書き行があり、日付は和暦（令和08年03月21日）。産次・最終分娩日あり、品種なし
+     山本   … 全飼養牛リスト。日付は 2025-11-24。品種・最終分娩日あり、産次なし
+     東大雪 … 全個体リスト。出荷済・廃用済も入っている（使わない）。分娩日・産次なし
+   見出しの行（「個体識別番号」がある行）を探し、列の名前で読む。ブラウザと node の両方で動く
+*/
+(function (root) {
+  "use strict";
+  const parseCsv = root.TAF ? root.TAF.parseCsv : (typeof require === "function" ? require("./taf.js").parseCsv : null);
+
+  // 「2025-11-24」「2025/11/24」「令和08年03月21日」「平成27年12月07日」→ "YYYY-MM-DD"
+  function isoDate(s) {
+    s = String(s || "").normalize("NFKC").trim();
+    let m = s.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+    if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+    m = s.match(/^(令和|平成|昭和)(\d{1,2}|元)年(\d{1,2})月(\d{1,2})日/);
+    if (!m) return "";
+    const base = { 令和: 2018, 平成: 1988, 昭和: 1925 }[m[1]], y = base + (m[2] === "元" ? 1 : Number(m[2]));
+    return `${y}-${m[3].padStart(2, "0")}-${m[4].padStart(2, "0")}`;
+  }
+  function breed(s, fallback) {
+    s = String(s || "");
+    if (/黒毛/.test(s)) return "黒毛和種";
+    if (/ブラウン/.test(s)) return "ブラウンスイス";
+    if (/ジャージ/.test(s)) return "ジャージー";
+    if (/交雑|F1/i.test(s)) return "交雑種";
+    if (/ホル/.test(s)) return "ホルスタイン";
+    return fallback;
+  }
+  const GONE = /出荷済|廃用済|死亡|売却|転出/;
+
+  // text: CSV の文字列。farm: { code, name }。fetchedOn: 取得日。defaultBreed: 品種の列が無い農家の品種
+  function parseFarm(text, farm, fetchedOn, defaultBreed) {
+    const rows = parseCsv(String(text).replace(/^﻿/, ""));
+    const hi = rows.findIndex(r => r.some(c => c.trim() === "個体識別番号"));
+    if (hi < 0) return [];
+    const head = rows[hi].map(h => h.trim()), col = n => head.indexOf(n);
+    const get = (r, ...names) => { for (const n of names) { const i = col(n); if (i >= 0 && r[i] != null && String(r[i]).trim() !== "") return String(r[i]).trim(); } return ""; };
+    const out = [];
+    for (const r of rows.slice(hi + 1)) {
+      const id = get(r, "個体識別番号").replace(/\D/g, "");
+      if (id.length !== 10) continue;
+      if (GONE.test(get(r, "一般ステータス"))) continue;      // 出荷・廃用した牛は使わない
+      const calv = isoDate(get(r, "最終分娩日"));
+      const parity = get(r, "産次").replace(/\D/g, "");
+      const status = get(r, "一般ステータス");
+      const heifer = !calv && !(parity && parity !== "0") && !/経産|搾乳|乾乳/.test(status);
+      out.push({
+        id, four: id.slice(5, 9), farm: farm.code,
+        birth: isoDate(get(r, "出生日")), name: "", breed: breed(get(r, "品種"), defaultBreed || ""),
+        sex: get(r, "性別"), parity, heifer, calv,
+        sire: get(r, "種付種雄牛名"), lastAI: isoDate(get(r, "最終種付日")), aiCount: "",
+        preg: get(r, "繁殖ステータス"), due: isoDate(get(r, "分娩予定日")),
+        ear: get(r, "耳標番号(自家指定)", "耳標番号"), src: "farmnote", asOf: fetchedOn || ""
+      });
+    }
+    return out;
+  }
+
+  const api = { isoDate, parseFarm };
+  if (typeof module === "object" && module.exports) module.exports = api;
+  else root.FARMNOTE = api;
+})(typeof globalThis !== "undefined" ? globalThis : this);
+</script>
 <script>/* 卵（ドナー×種雄牛）の候補を、打っている途中の文字から並べる
    - ブラウザ（index.html に埋め込み）と node（tests/eggs_test.js）の両方で動く
    - ひらがな/カタカナ・全角/半角・濁点・小さい字（ゃ/や）の違いは同じとみなす
@@ -656,15 +724,57 @@ details>summary{cursor:pointer;color:var(--ledger);font-size:13px}
       }
     },
     {
+      // 2枚目：細かい分析用（2026-10-18 先生が実物のブックで並びを決めた）。購入年月日・整理番号を足し、証明番号はその後ろ
       name: "ET記録",
-      how: "週に1回くらい：「済」が空の行（全員分）を、★ET記録R8年度★ の A列に B〜Z列ごと貼る → 済に〇。AB列から右は細かい記録（前投与・黄体など）",
-      head: ["済", ...HEAD_ET, "", "前投与（ホルモン）", "黄体 左右", "黄体サイズ", "血流", "BCS", "処置法", "メモ", "名号", "生年月日", "最終分娩"],
-      groups: [[0, "③ ★ET記録R8年度★へ：B〜Z列を A列に貼る"], [27, "細かい記録"]],
-      paste: ["B:Z"], id: 3, date: 4, text: [3], dates: { 35: "yyyy/m/d", 36: "yyyy/m/d" },
-      row: r => ["", ...rowET(r), "", (r.hormones || []).join("・"), r.side || "", num(r.clSize), num(r.flow), num(r.bcs), r.method || "", r.memo || "",
-        r.cowName || "", slash(r.birth), r.heifer ? "未経産" : slash(r.calv)]
+      how: "分析用：1頭1行。購入年月日は在庫のタブで使った卵の行から入る。AD列から右は細かい記録（前投与・黄体など）",
+      head: ["済", "農協コード", "組勘コード", "個体識別番号", "移植日", "受精（２）　移植（３）", "雄牛略号", "雄牛　名号",
+        "購入年月日", "ドナー名", "その他", "整理番号", "受精卵証明番号", "卵種類", "獣医師", "月", "妊娠", "証明書発行", "ジェネ　証明書", "証明書提出",
+        "発情区分", "DIM", "種付回数", "産次", "子宮角", "備考", "ホルモン1", "ホルモン剤", "",
+        "前投与（ホルモン）", "黄体 左右", "黄体サイズ", "血流", "BCS", "処置法", "メモ", "名号", "生年月日", "最終分娩"],
+      groups: [[0, "③ ★ET記録★・分析用（1頭1行）"], [29, "細かい記録"]],
+      paste: [], id: 3, date: 4, text: [3, 11], dates: { 8: "yyyy/m/d", 37: "yyyy/m/d", 38: "yyyy/m/d" },
+      row: r => {
+        const e = rowET(r), h = r.hormones || [];
+        return ["", ...e.slice(0, 7), slash(r.buyDate), r.donor || "", r.maker || "", String(r.num || ""), r.cert || "",
+          e[10], e[11], e[12], "", "", "", "", ...e.slice(17, 25), "",
+          h.join("・"), r.side || "", num(r.clSize), num(r.flow), num(r.bcs), r.method || "", r.memo || "",
+          r.cowName || "", slash(r.birth), r.heifer ? "未経産" : slash(r.calv)];
+      }
     },
   ];
+
+  /* ---------- 受精卵の在庫（3枚目から先のタブ。先生が会社ごとに分けて、買った卵を1本1行で先に入れておく） ----------
+     1行目が見出し：A 購入年月日 B 会社名 C ドナー名 D 精液名 E 整理番号 F 受精卵証明番号 G 卵種類 ｜ H 使用年月日 I 農家 J 4桁 K 獣医
+     使ったら H〜K を埋めて、その行（A〜K）を黄色にする＝在庫がはけた印。タブの名前・数は自由（見出しで見分ける） */
+  const STOCK_HEAD = ["購入年月日", "会社名", "ドナー名", "精液名", "整理番号", "受精卵証明番号", "卵種類", "使用年月日", "農家", "4桁", "獣医"];
+  const STOCK_USED_COL = 7, STOCK_FILL = "#FFFF00";
+  const nk = s => String(s ?? "").normalize("NFKC").replace(/[\s　]/g, "").toLowerCase();
+  const isStockHead = row => Array.isArray(row) && row.some(v => nk(v) === "ドナー名") && row.some(v => nk(v) === "使用年月日");
+  // シートの値（1行目＝見出し）→ 在庫の行の一覧。row は 1始まりの行番号
+  function parseStock(sheet, values) {
+    if (!values || !isStockHead(values[0])) return [];
+    const head = values[0].map(nk), col = name => head.indexOf(nk(name));
+    const c = Object.fromEntries(STOCK_HEAD.map(h => [h, col(h)]));
+    const g = (r, h) => c[h] >= 0 ? r[c[h]] : "";
+    const out = [];
+    values.slice(1).forEach((r, i) => {
+      const donor = String(g(r, "ドナー名") ?? "").trim(), bull = String(g(r, "精液名") ?? "").trim();
+      if (!donor && !bull) return;
+      out.push({ sheet, row: i + 2, buy: dateKey(g(r, "購入年月日")), company: String(g(r, "会社名") ?? "").trim(), donor, bull,
+        num: String(g(r, "整理番号") ?? "").trim(), cert: String(g(r, "受精卵証明番号") ?? "").trim(), type: String(g(r, "卵種類") ?? "").trim(),
+        used: !!String(g(r, "使用年月日") ?? "").trim(), cols: c });
+    });
+    return out;
+  }
+  // 使った卵の在庫の行を選ぶ：証明番号 → ドナー・精液・整理番号 → 整理番号が無ければ同じドナー×精液でいちばん古く買った行。使っていない行だけ
+  function pickStock(stock, r) {
+    const free = stock.filter(s => !s.used);
+    if (r.cert) { const hit = free.find(s => s.cert && nk(s.cert) === nk(r.cert)); if (hit) return hit; }
+    const same = free.filter(s => nk(s.donor) === nk(r.donor) && nk(s.bull).replace(/opu$/, "") === nk(r.bull).replace(/opu$/, ""));
+    if (r.num) { const hit = same.find(s => nk(s.num) === nk(r.num)); if (hit) return hit; if (same.length) return null; }
+    return same.sort((a, b) => (a.buy || "9999").localeCompare(b.buy || "9999") || a.row - b.row)[0] || null;
+  }
+  const stockUseValues = r => [slash(r.date), r.farm || "", four(r), r.vet || ""];
 
   // Excel の日付の値（シリアル値）・yyyymmdd の数・"YYYY/M/D" のどれでも "YYYY-MM-DD" にそろえる（二重確認用）
   function dateKey(v) {
@@ -677,7 +787,7 @@ details>summary{cursor:pointer;color:var(--ledger);font-size:13px}
   // 列番号 → A, B, …, Z, AA, …
   const colName = n => { let s = ""; n++; while (n) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
 
-  const api = { VETS, SHEETS, HEAD_ET, HEAD_JA, weekName, billing, rowET, rowJA, dateKey, colName };
+  const api = { VETS, SHEETS, HEAD_ET, HEAD_JA, STOCK_HEAD, STOCK_USED_COL, STOCK_FILL, weekName, billing, rowET, rowJA, dateKey, colName, isStockHead, parseStock, pickStock, stockUseValues };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.SHEET = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
@@ -722,7 +832,7 @@ const blank = () => ({
   date: todayISO(), farm: "", id: "", birth: "", breed: "ホルスタイン", calv: "", parity: "", heifer: "",
   donor: "", bull: "", num: "", cert: "", maker: "", eggType: "", nama: "", kari: "", ja: "", code: "", item: "", price: "", kind: "",
   side: "", clSize: "", flow: "", bcs: "", method: "", hormones: [], memo: "",
-  cowName: "", owner: "", tafId: "", aiCount: "", photo: null, ocr: null, carryFarm: "", latest: null, dateNote: "", bcId: ""
+  cowName: "", owner: "", tafId: "", stockKey: "", aiCount: "", photo: null, ocr: null, carryFarm: "", latest: null, dateNote: "", bcId: ""
 });
 let F = blank();
 let myVet = ""; try { myVet = localStorage.getItem("et_vet") || ""; } catch {}
@@ -806,13 +916,13 @@ function renderDerived() {
   const tafHits = tafIdx && F.id && F.id.length !== 10 ? TAF.lookup(tafIdx, F.id, (farmByShort(F.farm) || {}).taf || "") : [];
   if (tafIdx && (F.id.length === 4 || F.id.length === 5)) {
     h = tafHits.length ? `${tafHits.length > 1 ? "同じ番号の牛が" + tafHits.length + "頭います。" : ""}押すと牛の情報が入ります<div class="pick">${tafHits.slice(0, 8).map(t => `<button type="button" data-tafid="${t.id}"><b>${t.id.slice(5, 9)}</b> ${t.id.slice(9)}　${esc(farmByTaf(t.farm) ? farmByTaf(t.farm).short : t.farm)}<br><small>${esc(tafLine(t))}</small></button>`).join("")}</div>`
-      : `<span class="hint warn">${F.farm ? esc(F.farm) + "の" : ""}TAFの一覧に4桁「${esc(F.id.slice(0, 4))}」の牛はいません。${F.farm ? "農場が合っているか確認するか、" : ""}10桁で入れてください</span>`;
+      : `<span class="hint warn">${F.farm ? esc(F.farm) + "の" : ""}牛の一覧（TAF・ファームノート）に4桁「${esc(F.id.slice(0, 4))}」の牛はいません。${F.farm ? "農場が合っているか確認するか、" : ""}10桁で入れてください</span>`;
   } else if (F.id && F.id.length === 4) {
     const hits = Object.keys(cows).filter(k => k.slice(5, 9) === F.id).sort((a, b) => ((cows[b].f === F.farm) - (cows[a].f === F.farm)) || (cows[b].t || "").localeCompare(cows[a].t || "")).slice(0, 6);
     h = hits.length ? `4桁が同じ牛：押すと入ります<div class="pick">${hits.map(k => `<button type="button" data-pickid="${k}"><b>${k}</b>　${esc(cows[k].f || "")}${cows[k].t ? "　最終移植 " + md(cows[k].t) : ""}</button>`).join("")}</div>`
       : `<span class="hint warn">過去の記録に4桁「${esc(F.id)}」の牛はいません。10桁で入れてください</span>`;
   } else if (F.id && F.id.length !== 10) h = `<span class="hint warn">10桁で入力してください（いま${F.id.length}桁）。4桁だけでも候補が出ます</span>`;
-  else if (tafIdx && tafIdx.byId[F.id] && !c) h = `TAFの一覧（${esc(tafIdx.byId[F.id].asOf || "")}取得）から入れました。この牛の移植は初めてです`;
+  else if (tafIdx && tafIdx.byId[F.id] && !c) { const t0 = tafIdx.byId[F.id]; h = `${t0.src === "farmnote" ? "ファームノート" : "TAF"}の一覧（${esc(t0.asOf || "")}取得）から入れました。この牛の移植は初めてです`; }
   else if (c) h = `過去の移植 ${c.n}回（最終 ${slash(c.t)}・${esc(c.f || "")}）。今回は${c.n + 1}回目`;
   else if (F.id) h = "このアプリと分析シートでは初めての個体です";
   if (F.ocr && F.ocr.checkMsg) h = F.ocr.checkMsg + (h ? "　" + h : "");
@@ -824,7 +934,8 @@ function renderDerived() {
   } else if (F.calv && F.date) {
     const d = days(F.date, F.calv);
     dim = `DIM ${d}日` + (d < 40 ? "（分娩後40日未満です）" : "");
-  } else if (F.id) dim = `<span class="hint warn">分娩日が未入力です。未経産なら「未経産」を押してください</span>`;
+  } else if (F.id && tafIdx && tafIdx.byId[F.id] && tafIdx.byId[F.id].src === "farmnote") dim = `<span class="hint">DIM —（この農家のファームノートの一覧には分娩日がありません。必要なら牛の情報の「直す」から）</span>`;
+  else if (F.id) dim = `<span class="hint warn">分娩日が未入力です。未経産なら「未経産」を押してください</span>`;
   $("#o-dim").innerHTML = dim;
   // 牛の情報は1行の要約だけ見せる（現場では細かいプロフィールは要らない）。TAF に無い牛は入力できるよう開く
   const prof = [F.breed !== "ホルスタイン" ? F.breed : "", F.heifer ? "未経産" : F.parity ? `${F.parity}産` : "",
@@ -904,7 +1015,8 @@ function renderDonorSugg() {
     const d = master.donors[h.i];
     const note = [d.maker, d.type,
       h.farmLast ? `この農家で ${md(h.farmLast)}` : d.last ? `最終 ${md(d.last)}` : "",
-      d.list && !d.n ? `${d.list.maker}リスト ${Number(d.list.month.slice(5))}月${d.list.stock ? "・" + d.list.stock + "本" : ""}` : ""].filter(Boolean).join("　");
+      d.list && !d.n ? `${d.list.maker}リスト ${Number(d.list.month.slice(5))}月${d.list.stock ? "・" + d.list.stock + "本" : ""}` : "",
+      STOCK.length ? `在庫${freeStock(d.donor, d.bull).length}本` : ""].filter(Boolean).join("　");
     return `<button type="button" data-ci="${h.i}" class="${d === sel ? "on" : ""}"><span><b>${esc(d.donor)}</b> × ${esc(d.bull)}</span><span class="m">${esc(note)}</span></button>`;
   }).join("") || `<div class="hint">候補はありません。種雄牛と製造を入れると新しい組み合わせとして登録します。</div>`;
 }
@@ -912,7 +1024,7 @@ function renderBullList() {
   const bulls = [...new Set(master.donors.map(d => d.bull))];
   $("#bullList").innerHTML = bulls.map(b => `<option value="${esc(b)}">`).join("");
 }
-function renderForm() { fillInputs(); setChipGroups(); renderDerived(); renderMakerChips(); renderDonorSugg(); renderLatest(); }
+function renderForm() { fillInputs(); setChipGroups(); renderDerived(); renderMakerChips(); renderDonorSugg(); renderLatest(); renderStockChips(); }
 
 /* ---------- form events ---------- */
 function bindInput(sel, k, after) {
@@ -966,8 +1078,10 @@ document.addEventListener("click", e => {
   if (tab) { ui.tab = tab.dataset.tab; showTab(); }
 });
 function applyCombo(c) {
+  F.stockKey = ""; // 卵を選び直したら、選んでいた在庫の行は外す
   Object.assign(F, { donor: c.donor, bull: c.bull, maker: c.maker || "", eggType: c.type || "", nama: /^生/.test(c.type || "") ? "1" : F.nama, kind: c.kind || "wagyu", kari: c.karibara || F.kari, code: c.code || "", ja: "", item: "", price: c.price ? String(c.price) : "" });
-  ui.eggOpen = false; renderForm(); $("#f-num").focus();
+  ui.eggOpen = false; renderForm();
+  if (!freeStock(F.donor, F.bull).length) $("#f-num").focus(); // 在庫があれば押して選ぶので、キーボードは出さない
 }
 function resetCarryIfFarmChanged() {
   if (!F.carryFarm || !F.farm || F.farm === F.carryFarm) return false;
@@ -1045,7 +1159,7 @@ async function checkGraph() {
     const list = await (await graph(drivePath(TAF_DIR) + "/children?$select=name,folder,lastModifiedDateTime&$top=200")).json();
     const n = list.value.filter(x => x.folder && /^\d{8}_/.test(x.name)).length;
     box.textContent = `会社OneDriveの「${TAF_DIR}」を読めました（${n}戸）。牛の情報はここから読みます。`;
-    DATA.useGraph = true; loadFarmsAndTaf(); flushXl(false);
+    DATA.useGraph = true; loadFarmsAndTaf(); flushXl(false); loadStock();
   } catch (e) {
     box.textContent = "会社OneDriveを読めませんでした：" + (e.message || e);
   }
@@ -1067,11 +1181,26 @@ async function ensureBook(name) {
     .catch(async e => { if (/^409/.test(e.message)) return graph(drivePath(path) + "?$select=id"); throw e; }); // 同時に作られていたら、それを使う
   return bookIds[name] = (await r.json()).id;
 }
+// 前に作ったブックに、あとから足したタブ（受精卵使用 など）が無ければ、その場で足して1・2行目の見出しを書く
+const sheetsSeen = {};
+async function ensureSheet(bookId, sh) {
+  const key = bookId + "|" + sh.name; if (sheetsSeen[key]) return;
+  const list = await (await graph(`/me/drive/items/${bookId}/workbook/worksheets?$select=name`)).json();
+  if (!list.value.some(w => w.name === sh.name)) {
+    await graph(`/me/drive/items/${bookId}/workbook/worksheets/add`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: sh.name }) });
+    const n = sh.head.length, top = new Array(n).fill("");
+    for (const [c, t] of sh.groups) top[c] = t;
+    await graph(`/me/drive/items/${bookId}/workbook/worksheets/${encodeURIComponent(sh.name)}/range(address='A1:${SHEET.colName(n - 1)}2')`,
+      { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ values: [top, sh.head] }) });
+  }
+  sheetsSeen[key] = true;
+}
 async function appendSheet(bookId, sh, rec) {
   const ws = `/me/drive/items/${bookId}/workbook/worksheets/${encodeURIComponent(sh.name)}`;
   const C = SHEET.colName, idc = C(sh.id), dc = C(sh.date);
   const row = sh.row(rec).map(v => v == null ? "" : v);
   const fmt = row.map((v, i) => sh.text.includes(i) ? "@" : (sh.dates[i] || "General"));
+  await ensureSheet(bookId, sh);
   for (let tries = 0; tries < 4; tries++) {
     const ur = await (await graph(`${ws}/usedRange(valuesOnly=true)?$select=rowIndex,rowCount`)).json();
     const last = Math.max(2, ur.rowIndex + ur.rowCount); // 1・2行目は見出し
@@ -1089,10 +1218,81 @@ async function appendSheet(bookId, sh, rec) {
 async function appendToBook(rec) {
   if (!rec.vet) throw new Error("獣医師が決まっていません");
   const id = await ensureBook(bookName(rec));
+  // 受精卵の在庫：使った卵の行を先に決める（購入年月日を ET記録 に入れるため）。練習用のブックには在庫が無いので見ない
+  let s = null;
+  if (!rec.test) {
+    const st = await readStock(id).catch(() => []);
+    if (rec.stockKey) s = st.find(x => x.sheet + "|" + x.row === rec.stockKey && !x.used) || null;
+    s = s || SHEET.pickStock(st, rec);
+    if (s) Object.assign(rec, { buyDate: s.buy, num: rec.num || s.num, cert: rec.cert || s.cert });
+  }
   const out = [];
   for (const sh of SHEET.SHEETS) out.push(await appendSheet(id, sh, rec));
-  return out[0];
+  const res = out[0];
+  if (res.dup || rec.test) return res;
+  if (s) { await markStockUsed(id, s, rec); res.stock = s; } else res.stockMiss = true;
+  return res;
 }
+
+/* ---------- 受精卵の在庫（移植記録ブックの3枚目から先のタブ。先生が会社ごとに、買った卵を1本1行で入れておく） ----------
+   見出しの1行目に「ドナー名」「使用年月日」があるタブを在庫とみなす（src/sheet.js の parseStock）。
+   使ったら H〜K（使用年月日・農家・4桁・獣医）を埋めて行を黄色にする＝在庫がはけた印 */
+let STOCK = [];
+async function readStock(bookId) {
+  const list = await (await graph(`/me/drive/items/${bookId}/workbook/worksheets?$select=name`)).json();
+  const names = list.value.map(w => w.name).filter(n => !SHEET.SHEETS.some(sh => sh.name === n));
+  const all = [];
+  for (const n of names) {
+    const ur = await (await graph(`/me/drive/items/${bookId}/workbook/worksheets/${encodeURIComponent(n)}/usedRange(valuesOnly=true)?$select=values,rowIndex,columnIndex`)).json();
+    if (ur.rowIndex !== 0 || ur.columnIndex !== 0) continue; // 見出しは A1 から
+    all.push(...SHEET.parseStock(n, ur.values));
+  }
+  STOCK = all; CACHE.set("stock", all); addStockEggs(); renderStockChips();
+  return all;
+}
+async function loadStock() {
+  if (!account) return;
+  try { await readStock(await ensureBook("移植記録.xlsx")); } catch (e) { /* 読めなければ覚えている分のまま */ }
+}
+async function markStockUsed(bookId, s, rec) {
+  const ws = `/me/drive/items/${bookId}/workbook/worksheets/${encodeURIComponent(s.sheet)}`;
+  const vals = SHEET.stockUseValues(rec), cols = ["使用年月日", "農家", "4桁", "獣医"].map(h => s.cols[h]);
+  for (let i = 0; i < 4; i++) {
+    if (cols[i] == null || cols[i] < 0) continue;
+    const a = SHEET.colName(cols[i]) + s.row;
+    await graph(`${ws}/range(address='${a}')`, { method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values: [[vals[i]]], numberFormat: [[i === 0 ? "yyyy/m/d" : i === 2 ? "@" : "General"]] }) });
+  }
+  const last = SHEET.colName(Math.max(...Object.values(s.cols).filter(c => c >= 0)));
+  await graph(`${ws}/range(address='A${s.row}:${last}${s.row}')/format/fill`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ color: SHEET.STOCK_FILL }) });
+  s.used = true; CACHE.set("stock", STOCK); renderStockChips();
+}
+// 在庫にしかない卵も、ドナーの候補に出す（製造＝会社名）
+function addStockEggs() {
+  for (const s of STOCK) {
+    if (s.used || master.donors.some(d => nz(d.donor) === nz(s.donor) && nz(d.bull) === nz(s.bull))) continue;
+    master.donors.push({ donor: s.donor, bull: s.bull, maker: s.company, type: s.type, kind: /[A-Za-zｦ-ﾟ]/.test(s.donor + s.bull) ? "hol" : "wagyu", n: 0, last: s.buy || "", farms: {} });
+  }
+}
+const sameEgg = (s, donor, bull) => nz(s.donor) === nz(donor) && nz(s.bull).replace(/OPU$/i, "") === nz(bull).replace(/OPU$/i, "");
+const freeStock = (donor, bull) => STOCK.filter(s => !s.used && sameEgg(s, donor, bull)).sort((a, b) => (a.buy || "9999").localeCompare(b.buy || "9999") || a.row - b.row);
+// 入力画面：選んだ卵の在庫（使っていない行）を並べる。押すと整理番号・証明番号が入る
+function renderStockChips() {
+  const box = $("#stockChips"); if (!box) return;
+  if (!F.donor || !F.bull || !STOCK.length) { box.innerHTML = ""; return; }
+  const free = freeStock(F.donor, F.bull);
+  box.innerHTML = free.length
+    ? `<div class="lbl">在庫 ${free.length}本（押すと整理番号が入ります。押さなければ、いちばん古く買った卵を使ったことにします）</div><div class="chips">` +
+      free.slice(0, 12).map(s => `<button class="chip sm${F.stockKey === s.sheet + "|" + s.row ? " on" : ""}" type="button" data-stock="${esc(s.sheet + "|" + s.row)}">${esc(s.num || "番号なし")}<small>　${esc(s.company || s.sheet)}${s.buy ? "・" + md(s.buy) + "購入" : ""}</small></button>`).join("") + `</div>`
+    : `<div class="hint warn">在庫のタブに、この卵の残りがありません（買った卵を在庫のタブに入れてください）</div>`;
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-stock]"); if (!b) return;
+  const s = STOCK.find(x => x.sheet + "|" + x.row === b.dataset.stock); if (!s) return;
+  if (F.stockKey === b.dataset.stock) { F.stockKey = ""; } else Object.assign(F, { stockKey: b.dataset.stock, num: s.num, cert: s.cert, eggType: s.type || F.eggType });
+  if (document.activeElement && ["f-num", "f-cert"].includes(document.activeElement.id)) document.activeElement.blur();
+  fillInputs(); $("#f-num").value = F.num || ""; $("#f-cert").value = F.cert || ""; renderStockChips(); renderDerived();
+});
 // 台帳の写真を TAF牛一覧/_移植アプリ連携/写真/YYYY-MM/ に置く
 async function uploadPhoto(rec, blob) {
   const name = `${rec.date.replace(/-/g, "")}_${rec.farm}_${rec.four}_${rec.vet || ""}.jpg`.replace(/[\/:*?"<>|]/g, "");
@@ -1108,6 +1308,7 @@ async function sendToBook(id, manual) {
   const rec = LS.get("et_records", []).find(r => r._id === id); if (!rec) return true;
   try {
     const res = await appendToBook(rec);
+    if (res && res.stock) await store.put(id, { ...rec, _id: undefined }).catch(() => {});
     await store.flag(id, "x"); xlQueue = xlQueue.filter(q => q !== id); saveXlq(); localChanged();
     return res;
   } catch (e) {
@@ -1131,6 +1332,7 @@ $("#btnSignOut").onclick = () => msalApp && msalApp.logoutRedirect({ account });
 
 // マスタ（農家の一覧・受精卵マスタ・ブックのひな形）の置き場所。公開する index.html には入れない（農家の名前などが入るため）
 const MASTER_DIR = "TAF牛一覧/_移植アプリ連携/マスタ";
+const FN_DIR = "TAF牛一覧/ファームノート";
 // 読み先：サインインしていれば会社OneDrive、していなければ手元のプレビュー用（dist/data。tools/dev_data.py が写す）
 const DATA = {
   useGraph: false,
@@ -1151,6 +1353,20 @@ const DATA = {
       return list.value.filter(x => x.folder && /^\d{8}_/.test(x.name)).map(x => ({ folder: x.name, date: (x.lastModifiedDateTime || "").slice(0, 10) }));
     }
     return (await this.json("data/taf/manifest.json")).folders;
+  },
+  // ファームノートの農家（友夢・東大雪・山本）：TAF牛一覧/ファームノート/<略称>/牛一覧_最新.csv（先生が落として置く）
+  async fnList() {
+    if (this.useGraph) {
+      const list = await (await graph(drivePath(FN_DIR) + "/children?$select=name,folder,lastModifiedDateTime&$top=50")).json();
+      return list.value.filter(x => x.folder).map(x => ({ folder: x.name, date: (x.lastModifiedDateTime || "").slice(0, 10) }));
+    }
+    return (await this.json("data/fn/manifest.json")).folders;
+  },
+  async fnCsv(folder) {
+    const r = this.useGraph
+      ? await graph(drivePath(`${FN_DIR}/${folder}/牛一覧_最新.csv`) + "/content").catch(() => null)
+      : await fetch(`data/fn/${encodeURIComponent(folder)}/${encodeURIComponent("牛一覧_最新.csv")}`).catch(() => null);
+    return r && r.ok ? new TextDecoder("shift_jis").decode(await r.arrayBuffer()) : "";
   },
   async tafCsv(folder) {
     const r = this.useGraph
@@ -1205,6 +1421,7 @@ async function loadFarmsAndTaf() {
     cacheShown = true;
     const c = await CACHE.get("all");
     if (c && c.cows) { applyFarms(c.farms); applyEggs(c.eggs); applyCows(c.cows, c.tafFarms, c.info + "・端末に保存した分"); }
+    const st = await CACHE.get("stock"); if (st && st.length) { STOCK = st; addStockEggs(); }
   }
   // 2) 新しいものを読めたら、入れ替えて覚え直す
   let farms = null, eggs = null;
@@ -1220,8 +1437,18 @@ async function loadFarmsAndTaf() {
     if ((fd.date || "") > asOf) asOf = fd.date;
     tafFarms.push(farm);
   }));
+  // ファームノートの農家も同じ形で足す（農家の一覧では taf が FN_略称）
+  let fnFarms = [];
+  try { fnFarms = await DATA.fnList(); } catch { /* 無ければ TAF だけ */ }
+  let fnCount = 0;
+  await Promise.all(fnFarms.map(async fd => {
+    const text = await DATA.fnCsv(fd.folder).catch(() => "");
+    if (!text) return;
+    const cows = FARMNOTE.parseFarm(text, { code: "FN_" + fd.folder, name: fd.folder }, fd.date || "", "ホルスタイン");
+    all.push(...cows); if (cows.length) fnCount++;
+  }));
   if (!all.length) return; // 1頭も読めなければ、覚えている分を使い続ける
-  const info = `TAF ${folders.length}戸・${all.length}頭（${asOf}取得）`;
+  const info = `TAF ${folders.length}戸・ファームノート ${fnCount}戸・${all.length}頭（TAF ${asOf}取得）`;
   applyCows(all, tafFarms, info);
   if (DATA.useGraph) CACHE.set("all", { farms, eggs, cows: all, tafFarms, info, at: Date.now() });
 }
@@ -1689,7 +1916,7 @@ function buildRecord() {
     date: F.date, farm: F.farm, kumi: f ? f.kumi : (F.owner || F.farm), id: F.id, four: four(F.id), birth: F.birth, breed: F.breed,
     calv: F.heifer ? "" : F.calv, heifer: !!F.heifer, parity: F.parity, aiCount: F.aiCount || "", vet: myVet, cowName: F.cowName || "", owner: F.owner || "",
     bill: (eg && eg.bill) || null, billKari: (eg && eg.billKari) || null, jiko: (f && f.jiko) || "",
-    donor: F.donor, bull: F.bull, num: F.num, cert: F.cert || "", maker: F.maker, eggType: F.eggType || "", nama: !!F.nama, kari: F.kari, kind: F.kind || (c && c.kind) || "wagyu",
+    stockKey: F.stockKey || "", donor: F.donor, bull: F.bull, num: F.num, cert: F.cert || "", maker: F.maker, eggType: F.eggType || "", nama: !!F.nama, kari: F.kari, kind: F.kind || (c && c.kind) || "wagyu",
     egg: eggString(F), ja: F.ja || defaultJa(F), code: F.code || (c && c.code) || "", item: F.item || (c && c.item) || defaultItem(F),
     price: Number(F.price || (c && c.price) || 0) || 0,
     side: F.side, clSize: F.clSize, flow: F.flow, bcs: F.bcs, method: F.method, hormones: F.hormones || [], memo: F.memo,
@@ -1725,7 +1952,7 @@ $("#btnSave").addEventListener("click", async () => {
       // 会社OneDrive版：移植記録ブックの自分のシートに1行足す（直した記録は自動では書き換えない）
       const old = wasEditing && records.find(r => r._id === docId);
       if (wasEditing && old && old.flags && old.flags.x) toast("移植記録ブックの行は自動では直りません。シートの行を手で直してください");
-      else sendToBook(docId).then(res => { if (res && res.dup) toast(`この牛はもう移植記録ブックの${res.row}行目にあります`); else if (res) toast(`移植記録ブックに入れました（${rec.farm} ${rec.four}・${res.row}行目）`); });
+      else sendToBook(docId).then(res => { if (res && res.dup) toast(`この牛はもう移植記録ブックの${res.row}行目にあります`); else if (res) toast(`移植記録ブックに入れました（${rec.farm} ${rec.four}・${res.row}行目）` + (res.stock ? `。在庫：${res.stock.sheet}の${res.stock.num || res.stock.row + "行目"}を使用済みにしました` : res.stockMiss ? "。在庫のタブにこの卵が見つかりませんでした" : "")); });
       if (photoBlob && account) uploadPhoto({ ...rec, _id: docId }, photoBlob).then(ph => store.setPhoto(docId, { path: ph.path, url: ph.url })).catch(() => {});
     }
     ocrToken++; ui.eggOpen = false;
