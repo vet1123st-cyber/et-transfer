@@ -724,18 +724,19 @@ details>summary{cursor:pointer;color:var(--ledger);font-size:13px}
       }
     },
     {
-      // 2枚目：細かい分析用（2026-10-18 先生が実物のブックで並びを決めた）。購入年月日・整理番号を足し、証明番号はその後ろ
+      // 2枚目：細かい分析用（2026-10-18 先生が実物のブックで並びを決めた）。名号の右に空き列、購入年月日・整理番号を足し、証明番号はその後ろ
+      // 書くときはブックの見出しの名前で列を決める（rowByHead）ので、この並びは新しく作るブックのひな形にだけ使う
       name: "ET記録",
       how: "分析用：1頭1行。購入年月日は在庫のタブで使った卵の行から入る。AD列から右は細かい記録（前投与・黄体など）",
-      head: ["済", "農協コード", "組勘コード", "個体識別番号", "移植日", "受精（２）　移植（３）", "雄牛略号", "雄牛　名号",
+      head: ["済", "農協コード", "組勘コード", "個体識別番号", "移植日", "受精（２）　移植（３）", "雄牛略号", "雄牛　名号", "",
         "購入年月日", "ドナー名", "その他", "整理番号", "受精卵証明番号", "卵種類", "獣医師", "月", "妊娠", "証明書発行", "ジェネ　証明書", "証明書提出",
         "発情区分", "DIM", "種付回数", "産次", "子宮角", "備考", "ホルモン1", "ホルモン剤", "",
         "前投与（ホルモン）", "黄体 左右", "黄体サイズ", "血流", "BCS", "処置法", "メモ", "名号", "生年月日", "最終分娩"],
-      groups: [[0, "③ ★ET記録★・分析用（1頭1行）"], [29, "細かい記録"]],
-      paste: [], id: 3, date: 4, text: [3, 11], dates: { 8: "yyyy/m/d", 37: "yyyy/m/d", 38: "yyyy/m/d" },
+      groups: [[0, "③ ★ET記録★・分析用（1頭1行）"], [30, "細かい記録"]],
+      paste: [], id: 3, date: 4, text: [3, 12], dates: { 9: "yyyy/m/d", 38: "yyyy/m/d", 39: "yyyy/m/d" },
       row: r => {
         const e = rowET(r), h = r.hormones || [];
-        return ["", ...e.slice(0, 7), slash(r.buyDate), r.donor || "", r.maker || "", String(r.num || ""), r.cert || "",
+        return ["", ...e.slice(0, 7), "", slash(r.buyDate), r.donor || "", r.maker || "", String(r.num || ""), r.cert || "",
           e[10], e[11], e[12], "", "", "", "", ...e.slice(17, 25), "",
           h.join("・"), r.side || "", num(r.clSize), num(r.flow), num(r.bcs), r.method || "", r.memo || "",
           r.cowName || "", slash(r.birth), r.heifer ? "未経産" : slash(r.calv)];
@@ -787,7 +788,20 @@ details>summary{cursor:pointer;color:var(--ledger);font-size:13px}
   // 列番号 → A, B, …, Z, AA, …
   const colName = n => { let s = ""; n++; while (n) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
 
-  const api = { VETS, SHEETS, HEAD_ET, HEAD_JA, STOCK_HEAD, STOCK_USED_COL, STOCK_FILL, weekName, billing, rowET, rowJA, dateKey, colName, isStockHead, parseStock, pickStock, stockUseValues };
+  /* ---------- 見出しの名前で書く（先生がブックの列を足したり並べ替えたりしても、見出しの名前が同じなら正しい列に入る） ----------
+     heads はブックの2行目（見出し）の値。見出しの無い列・知らない見出しの列には何も書かない */
+  const TEXT_HEADS = ["個体識別番号", "整理番号", "4桁"];
+  const DATE_HEADS = { "購入年月日": "yyyy/m/d", "生年月日": "yyyy/m/d", "最終分娩": "yyyy/m/d" };
+  function rowByHead(sh, heads, r) {
+    const vals = sh.row(r), byName = {};
+    sh.head.forEach((h, i) => { if (h && !(nk(h) in byName)) byName[nk(h)] = vals[i]; });
+    const row = heads.map(h => (h && nk(h) in byName) ? byName[nk(h)] : "");
+    const fmt = heads.map(h => TEXT_HEADS.some(t => nk(t) === nk(h)) ? "@" : (Object.keys(DATE_HEADS).find(d => nk(d) === nk(h)) ? "yyyy/m/d" : "General"));
+    const at = name => heads.findIndex(h => nk(h) === nk(name));
+    return { row, fmt, id: at("個体識別番号"), date: at("移植日") };
+  }
+
+  const api = { VETS, SHEETS, HEAD_ET, HEAD_JA, STOCK_HEAD, STOCK_USED_COL, STOCK_FILL, weekName, billing, rowET, rowJA, dateKey, colName, isStockHead, parseStock, pickStock, stockUseValues, rowByHead };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.SHEET = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
@@ -903,7 +917,7 @@ function fillInputs() {
 }
 function renderFarmSelect() {
   const sel = $("#f-farm");
-  const opts = [`<option value="">選ぶ</option>`].concat(master.farms.map(f => `<option value="${esc(f.short)}">${esc(f.short)}（${esc(f.kumi)}）</option>`));
+  const opts = [`<option value="">選ぶ</option>`].concat(master.farms.filter(f => !f.hide || f.short === F.farm).map(f => `<option value="${esc(f.short)}">${esc(f.short)}（${esc(f.kumi)}）</option>`));
   if (F.farm && !farmByShort(F.farm)) opts.push(`<option value="${esc(F.farm)}">${esc(F.farm)}（新規）</option>`);
   sel.innerHTML = opts.join(""); sel.value = F.farm || "";
 }
@@ -1196,20 +1210,26 @@ async function ensureSheet(bookId, sh) {
   sheetsSeen[key] = true;
 }
 async function appendSheet(bookId, sh, rec) {
-  const ws = `/me/drive/items/${bookId}/workbook/worksheets/${encodeURIComponent(sh.name)}`;
-  const C = SHEET.colName, idc = C(sh.id), dc = C(sh.date);
-  const row = sh.row(rec).map(v => v == null ? "" : v);
-  const fmt = row.map((v, i) => sh.text.includes(i) ? "@" : (sh.dates[i] || "General"));
   await ensureSheet(bookId, sh);
+  const ws = `/me/drive/items/${bookId}/workbook/worksheets/${encodeURIComponent(sh.name)}`;
+  const C = SHEET.colName;
+  // ブックの2行目（見出し）を読み、見出しの名前で列を決める（先生が列を足したり並べ替えたりしても正しく入る）
+  const hv = await (await graph(`${ws}/range(address='A2:BZ2')?$select=values`)).json();
+  let heads = hv.values[0].map(v => String(v ?? "").trim());
+  while (heads.length && !heads[heads.length - 1]) heads.pop();
+  if (!heads.length) heads = sh.head;
+  const w = SHEET.rowByHead(sh, heads, rec);
+  if (w.id < 0 || w.date < 0) throw new Error(`「${sh.name}」の見出しに「個体識別番号」「移植日」が見つかりません`);
+  const lo = Math.min(w.id, w.date), hi = Math.max(w.id, w.date);
   for (let tries = 0; tries < 4; tries++) {
     const ur = await (await graph(`${ws}/usedRange(valuesOnly=true)?$select=rowIndex,rowCount`)).json();
     const last = Math.max(2, ur.rowIndex + ur.rowCount); // 1・2行目は見出し
-    const kv = await (await graph(`${ws}/range(address='${idc}1:${dc}${last}')?$select=values`)).json();
-    const hit = kv.values.findIndex(v => String(v[0]).replace(/^'/, "") === rec.id && SHEET.dateKey(v[v.length - 1]) === rec.date);
+    const kv = await (await graph(`${ws}/range(address='${C(lo)}1:${C(hi)}${last}')?$select=values`)).json();
+    const hit = kv.values.findIndex(v => String(v[w.id - lo]).replace(/^'/, "") === rec.id && SHEET.dateKey(v[w.date - lo]) === rec.date);
     if (hit >= 0) return { row: hit + 1, dup: true };
     const n = last + 1;
-    await graph(`${ws}/range(address='A${n}:${C(row.length - 1)}${n}')`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ values: [row], numberFormat: [fmt] }) });
-    const back = await (await graph(`${ws}/range(address='${idc}${n}')?$select=values`)).json();
+    await graph(`${ws}/range(address='A${n}:${C(w.row.length - 1)}${n}')`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ values: [w.row.map(v => v == null ? "" : v)], numberFormat: [w.fmt] }) });
+    const back = await (await graph(`${ws}/range(address='${C(w.id)}${n}')?$select=values`)).json();
     if (String(back.values[0][0]).replace(/^'/, "") === rec.id) return { row: n, dup: false };
     // 同じ行に別の人が同時に書いた：もう一度、空いている行を探して書く
   }
@@ -1390,7 +1410,7 @@ function shortFor(name, taken) {
 function applyFarms(base) {
   for (const f of base || []) {
     const cur = farmByShort(f.short);
-    if (cur) Object.assign(cur, { kumi: f.kumi, taf: f.taf, src: f.src, jiko: f.jiko }); else master.farms.push({ ...f });
+    if (cur) Object.assign(cur, { kumi: f.kumi, taf: f.taf, src: f.src, jiko: f.jiko, hide: !!f.hide }); else master.farms.push({ ...f });
   }
 }
 function applyEggs(eggs) {
@@ -1409,7 +1429,9 @@ function applyCows(cows, tafFarms, info) {
     const taken = new Set(master.farms.map(f => f.short));
     master.farms.push({ short: shortFor(farm.name, taken), kumi: farm.name.replace(/\s+/g, ""), taf: farm.code, src: "taf" });
   }
-  tafIdx = TAF.buildIndex(cows || []);
+  // 移植していない農家（farms.json の hide）の牛は、4桁の候補に出さない
+  const hidden = new Set(master.farms.filter(f => f.hide && f.taf).map(f => f.taf));
+  tafIdx = TAF.buildIndex((cows || []).filter(c => !hidden.has(c.farm)));
   tafInfo = info;
   $("#syncState").textContent = tafInfo;
   autoTaf(); renderForm();
