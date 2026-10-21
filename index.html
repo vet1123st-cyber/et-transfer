@@ -1013,9 +1013,11 @@ function renderToday() {
     + (queue.length ? `<span class="hint warn">未送信 ${queue.length}頭</span><button type="button" id="btnFlush">今すぐ送る</button>` : "")
     + (typeof xlQueue !== "undefined" && xlQueue.length ? `<span class="hint warn">ブック未送 ${xlQueue.length}頭</span><button type="button" id="btnFlushXl">今すぐ送る</button>` : "");
 }
+// 製造のボタンは決まった7つ（2026-10-21 先生の指定）。卵の候補から別の製造（豊西ジェネ など）が入ったときは、それも横に出す
+const MAKERS = ["知多大", "デザミス", "Farmnote", "ジェネ", "東大雪", "ホル卵", "その他"];
 function renderMakerChips() {
-  const list = master.makers.slice(0, 14);
-  if (F.maker && !list.includes(F.maker)) list.unshift(F.maker);
+  const list = MAKERS.slice();
+  if (F.maker && !list.includes(F.maker)) list.push(F.maker);
   $("#makerChips").innerHTML = list.map(m => `<button class="chip sm${F.maker === m ? " on" : ""}" type="button" data-maker="${esc(m)}">${esc(m)}</button>`).join("");
 }
 function renderDonorSugg() {
