@@ -350,6 +350,14 @@ details>summary{cursor:pointer;color:var(--ledger);font-size:13px}
       </div></details>
     </section>
     <section class="sheet">
+      <h2>アプリの版</h2>
+      <div class="body">
+        <div class="hint" id="appVer"></div>
+        <div class="acts"><button class="btn" type="button" id="btnRefresh">最新の画面にする</button></div>
+        <div class="hint">新しい版を上げたのに古いままのときに押します。記録や覚えている牛の一覧は消えません。</div>
+      </div>
+    </section>
+    <section class="sheet">
       <h2>この画面で使える機能</h2>
       <div class="body kv" id="capInfo"></div>
     </section>
@@ -2295,7 +2303,32 @@ const isTyping = el => el && (el.tagName === "TEXTAREA" || el.tagName === "SELEC
 document.addEventListener("focusin", e => { if (isTyping(e.target)) document.body.classList.add("typing"); });
 document.addEventListener("focusout", () => setTimeout(() => { if (!isTyping(document.activeElement)) document.body.classList.remove("typing"); }, 150));
 // 画面を端末に残す（sw.js）。電波の無い所でも開けるように。手元のプレビュー（localhost）でも動く
-if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(r => r.update()).catch(() => {});
+
+/* ---------- 版（tools/build.py が作った日時を入れる）と、新しい版が出ていたら自動で読み込み直す ----------
+   GitHub Pages は10分間は前の画面を使ってよい指定なので、開いたとき・アプリに戻ったときに版をサーバーに聞き、違えば1回だけ読み込み直す */
+const APP_VER = "2026-11-10 13:46";
+$("#appVer").textContent = `この画面の版：${APP_VER}`;
+const freshUrl = () => location.pathname + "?v=" + Date.now() + location.hash;
+async function checkNewVersion() {
+  if (location.protocol !== "https:" || !navigator.onLine) return;
+  try {
+    const t = await (await fetch(location.pathname + "?check=" + Date.now(), { cache: "no-store" })).text();
+    const m = t.match(/const APP_VER = "([^"]+)"/);
+    if (!m || m[1] === APP_VER || m[1] === "__APP_VER__") return;
+    if (sessionStorage.getItem("et_reloaded_for") === m[1]) return; // 同じ版のために何度も読み込み直さない
+    if (!formIsFree()) { toast("新しい版があります。保存したあと、設定の「最新の画面にする」を押してください"); return; }
+    sessionStorage.setItem("et_reloaded_for", m[1]);
+    location.replace(freshUrl());
+  } catch { /* 電波が無ければ今の画面のまま */ }
+}
+setTimeout(checkNewVersion, 3000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkNewVersion(); });
+$("#btnRefresh").onclick = async () => {
+  try { const regs = await navigator.serviceWorker?.getRegistrations?.() || []; await Promise.all(regs.map(r => r.unregister())); } catch {}
+  try { const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k))); } catch {}
+  location.replace(freshUrl());
+};
 async function boot() {
   renderForm(); showTab();
   if (!window.claude || !window.claude.use) { offline(); return; }
