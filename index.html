@@ -238,6 +238,7 @@ details>summary{cursor:pointer;color:var(--ledger);font-size:13px}
         </div>
         <div id="stockChips">
         </div>
+        <label class="f">受精卵価格（円・卵を選ぶとマスタから入ります。直せます）<input id="f-price" class="num" inputmode="numeric" placeholder="例 33000"></label>
         <label class="f">受精卵証明番号（ストロー・証明書の番号）<input id="f-cert" autocomplete="off" placeholder="例 CDB-36032"></label>
         <div class="eggline" id="o-egg">卵 —</div>
         <details id="eggMore">
@@ -249,7 +250,7 @@ details>summary{cursor:pointer;color:var(--ledger);font-size:13px}
             </div>
             <div class="row" hidden>
               <label class="f">請求の品名<input id="f-item"></label>
-              <label class="f">金額（円）<input id="f-price" class="num" inputmode="numeric"></label>
+              <span></span>
             </div>
           </div>
         </details>
@@ -278,7 +279,7 @@ details>summary{cursor:pointer;color:var(--ledger);font-size:13px}
           <button class="chip" type="button" data-v="自然">自然</button><button class="chip" type="button" data-v="SS">SS</button><button class="chip" type="button" data-v="出血">出血</button><button class="chip" type="button" data-v="シダー">シダー</button>
         </div></div>
         <div><div class="lbl">ホルモン処置（複数可）</div><div class="chips" data-field="hormones" data-multi="1">
-          <button class="chip" type="button" data-v="hCG">hCG</button><button class="chip" type="button" data-v="LH">LH</button><button class="chip" type="button" data-v="ファストバック">ファストバック</button>
+          <button class="chip" type="button" data-v="hCG">hCG</button><button class="chip" type="button" data-v="LH">LH</button><button class="chip" type="button" data-v="ファストバック">ファストバック</button><button class="chip" type="button" data-v="デポー">デポー</button>
         </div></div>
         <label class="f">メモ<textarea id="f-memo" rows="2" placeholder="頸管通過、出血など"></textarea></label>
         <div id="warns" class="sugg"></div>
@@ -684,9 +685,11 @@ details>summary{cursor:pointer;color:var(--ledger);font-size:13px}
   function billing(r) {
     if (/^farm$|自家/i.test(r.maker || "")) return { item: "", price: "", none: "請求なし（農家の卵）" };
     const b = (r.kari && r.billKari) || r.bill;
-    if (b && b.item) return { item: b.item, price: b.price || "" };
+    // 単価：入力画面の「受精卵価格」（マスタから入り、直せる）を先に使う
+    const typed = Number(String(r.price ?? "").replace(/[^\d]/g, "")) || "";
+    if (b && b.item) return { item: b.item, price: typed || b.price || "" };
     if (!r.bull && !r.donor) return { item: "", price: "" };
-    return { item: `受精卵代金（${r.bull}　${r.donor}）`, price: "", guess: true };
+    return { item: `受精卵代金（${r.bull}　${r.donor}）`, price: typed, guess: true };
   }
 
   // ★ET記録R8年度★ の A〜Y（A 列と X 列は ★ET記録★ では見出しが空欄だが、分かるように名前を付ける）
@@ -1074,6 +1077,7 @@ document.addEventListener("click", e => {
     else if (field === "outMode" || field === "dfilter") obj[field] = v;
     else obj[field] = obj[field] === v ? "" : v;
     if (field === "heifer" && F.heifer) { F.calv = ""; F.parity = "0"; fillInputs(); }
+    if (field === "kari") { const ce = comboFor(F) || master.donors.find(d => d.donor === F.donor && d.bull === F.bull); if (ce) { F.price = eggPrice(ce, F.kari); fillInputs(); } } // 仮腹先で品目と価格が変わる
     setChipGroups(); renderDerived();
     if (!inF) { if (field === "dfilter") { ui.openDonor = null; renderSettings(); } else renderOut(); }
     return;
@@ -1093,9 +1097,14 @@ document.addEventListener("click", e => {
   const tab = e.target.closest("nav.tabs button");
   if (tab) { ui.tab = tab.dataset.tab; showTab(); }
 });
+// 受精卵の価格（マスタ）：仮腹先があれば仮腹用の品目の単価 → 事故外リストの単価 → 先生の172組の価格
+function eggPrice(c, kari) {
+  const p = (kari && c.billKari && c.billKari.price) || (c.bill && c.bill.price) || c.price || "";
+  return p ? String(p) : "";
+}
 function applyCombo(c) {
   F.stockKey = ""; // 卵を選び直したら、選んでいた在庫の行は外す
-  Object.assign(F, { donor: c.donor, bull: c.bull, maker: c.maker || "", eggType: c.type || "", nama: /^生/.test(c.type || "") ? "1" : F.nama, kind: c.kind || "wagyu", kari: c.karibara || F.kari, code: c.code || "", ja: "", item: "", price: c.price ? String(c.price) : "" });
+  Object.assign(F, { donor: c.donor, bull: c.bull, maker: c.maker || "", eggType: c.type || "", nama: /^生/.test(c.type || "") ? "1" : F.nama, kind: c.kind || "wagyu", kari: c.karibara || F.kari, code: c.code || "", ja: "", item: "", price: eggPrice(c, c.karibara || F.kari) });
   ui.eggOpen = false; renderForm();
   if (!freeStock(F.donor, F.bull).length) $("#f-num").focus(); // 在庫があれば押して選ぶので、キーボードは出さない
 }
@@ -1847,7 +1856,7 @@ function autoEgg() {
   const cs = eggCands(raw); if (!cs.length || cs[0].s < .7) return "";
   if (cs.some(x => x.s >= .7 && x.c.donor === F.donor && x.c.bull === F.bull)) return "";
   const c = cs[0].c;
-  Object.assign(F, { donor: c.donor, bull: c.bull, maker: c.maker || "", eggType: c.type || "", nama: /^生/.test(c.type || "") ? "1" : F.nama, kind: c.kind || "wagyu", kari: c.karibara || F.kari, code: c.code || "", ja: "", item: "", price: c.price ? String(c.price) : "" });
+  Object.assign(F, { donor: c.donor, bull: c.bull, maker: c.maker || "", eggType: c.type || "", nama: /^生/.test(c.type || "") ? "1" : F.nama, kind: c.kind || "wagyu", kari: c.karibara || F.kari, code: c.code || "", ja: "", item: "", price: eggPrice(c, c.karibara || F.kari) });
   ui.eggOpen = false;
   return `${c.donor}×${c.bull}`;
 }
